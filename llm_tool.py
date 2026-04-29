@@ -12,6 +12,12 @@ class LLMTool(object):
         temperature=0,
         top_p=1,
     ):
+        """
+        :param model_name: str, the name of the model to use, support gpt、claude、gemini、qwen etc.
+        :param reasoning_effort: str or bool, the reasoning effort parameter, gpt-5: [None, "minimum", "low", "medium", "high"]; claude: [None, "enabled", "disabled"]; gemini: bool
+        :param temperature: float, the temperature parameter, controls the randomness of the output (0 for deterministic output, higher for more randomness). Note: gpt-5 fixed to 1, claude enabled thinking fixed to 1
+        :param top_p: float, the top-p sampling parameter, controls the diversity of the output vocabulary
+        """
         self.api_key = api_key
         self.base_url = base_url
 
