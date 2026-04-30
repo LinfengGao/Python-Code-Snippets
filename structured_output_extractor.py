@@ -7,12 +7,38 @@ from pydantic import BaseModel, ValidationError
 
 
 class StructuredOutputExtractor:
+    """结构化输出提取器类
+    
+    用于从大语言模型(LLM)的响应中提取符合指定 Pydantic 模型格式的结构化数据。
+    支持自动构建示例 JSON 格式、发送请求、验证响应格式以及失败重试机制。
+    
+    Attributes:
+        client: OpenAI 客户端实例，用于调用 LLM API
+        model: 使用的模型名称，默认为 "qwen3.6-flash"
+    """
+    
     def __init__(self, client: OpenAI, model: str = "qwen3.6-flash"):
+        """初始化结构化输出提取器
+        
+        Args:
+            client: OpenAI 客户端实例
+            model: 使用的模型名称
+        """
         self.client = client
         self.model = model
     
     @staticmethod
     def get_type_str(annotation) -> str:
+        """获取类型的字符串表示
+        
+        将 Python 类型注解转换为可读的字符串形式，用于生成示例 JSON。
+        
+        Args:
+            annotation: Python 类型注解（如 str, int, List[str] 等）
+            
+        Returns:
+            类型的字符串表示，例如 'str', 'int', 'list[str]'
+        """
         if hasattr(annotation, '__name__'):
             return annotation.__name__
         type_str = str(annotation)
@@ -20,6 +46,17 @@ class StructuredOutputExtractor:
     
     @classmethod
     def build_example_json(cls, model_class: Type[BaseModel]) -> dict:
+        """根据 Pydantic 模型构建示例 JSON 字典
+        
+        遍历模型的所有字段，根据字段类型和描述信息生成示例值。
+        示例值包含类型占位符和字段描述，用于指导 LLM 生成正确格式的输出。
+        
+        Args:
+            model_class: Pydantic BaseModel 的子类
+            
+        Returns:
+            包含示例数据的字典，格式如: {"field_name": "<type> - description"}
+        """
         example = {}
         for field, field_info in model_class.model_fields.items():
             type_str = cls.get_type_str(field_info.annotation)
@@ -42,11 +79,36 @@ class StructuredOutputExtractor:
         return example
     
     def build_task_prompt(self, model_class: Type[BaseModel], task_description: str) -> str:
+        """构建完整的任务提示词
+        
+        将任务描述和示例 JSON 格式组合成 system prompt，用于指导 LLM 生成符合要求的 JSON 输出。
+        
+        Args:
+            model_class: Pydantic BaseModel 的子类，用于生成示例 JSON
+            task_description: 任务描述文本
+            
+        Returns:
+            格式化的提示词字符串，包含任务描述和 JSON 响应格式示例
+        """
         example_json = self.build_example_json(model_class)
         prompt = f"## Task Description\n{task_description}\n\n## Response Format\n```json\n{json.dumps(example_json, indent=2, ensure_ascii=False)}\n```"
         return prompt
     
     def validate_json_format(self, json_string: str, model_class: Type[BaseModel]) -> tuple[bool, Any, str]:
+        """验证 JSON 字符串是否符合指定的 Pydantic 模型格式
+        
+        尝试解析 JSON 字符串并使用 Pydantic 模型进行数据验证。
+        
+        Args:
+            json_string: 待验证的 JSON 字符串
+            model_class: 用于验证的 Pydantic BaseModel 子类
+            
+        Returns:
+            包含三个元素的元组:
+                - bool: 验证是否成功
+                - Any: 验证成功时返回模型实例，失败时为 None
+                - str: 验证结果消息（成功信息或错误信息）
+        """
         try:
             data = json.loads(json_string)
             obj = model_class.model_validate(data)
@@ -59,6 +121,23 @@ class StructuredOutputExtractor:
             return False, None, f"未知错误: {str(e)}"
     
     def extract(self, model_class: Type[BaseModel], task_description: str, user_input: str, max_retries: int = 3) -> Any:
+        """从 LLM 响应中提取结构化数据
+        
+        核心方法：构建提示词，调用 LLM API，验证响应格式，支持失败自动重试。
+        使用指数退避策略进行重试（2^attempt 秒）。
+        
+        Args:
+            model_class: 期望返回数据对应的 Pydantic BaseModel 子类
+            task_description: 任务描述，会作为 system prompt 的一部分
+            user_input: 用户输入内容，会作为 user message
+            max_retries: 最大重试次数，默认为 3
+            
+        Returns:
+            验证通过的 Pydantic 模型实例
+            
+        Raises:
+            ValueError: 当超过最大重试次数时抛出，包含最后一次错误信息
+        """
         task_prompt = self.build_task_prompt(model_class, task_description)
         messages = [
             {"role": "system", "content": task_prompt},
